@@ -3,8 +3,50 @@ declare license "GPLv3";
 declare name "CZoscs";
 import("stdfaust.lib");
 
-process(fund,index,res) =
- CZsawPAA(fund, index)
+process =
+  // basicCZosc(oscType,index,res,phase,reset,freq);
+  prefilterCZosc(oscType,filterType,filterFreq,filterQ,index,res,phase,reset,freq);
+
+prefilterCZosc(oscType,filterType,filterFreq,filterQ,index,res,phase,reset,freq) =
+  (
+    ( fund(freq,phase,reset) : filterChooser(filterType,filterFreq,filterQ))
+   ,index
+   ,res
+  )
+  : oscillatorChooser(oscType);
+
+basicCZosc(oscType,index,res,phase,reset,freq) =
+  (fund(freq,phase,reset),index,res)
+  : oscillatorChooser(oscType);
+
+fund(freq,phase,reset) = lf_sawpos_phase_reset(freq,phase,reset);
+
+oscillatorChooser(oscType,fund,index,res) =
+  chooseOne(allOscsParallel(fund,index,res),oscType);
+
+filterChooser(filterType,filterFreq,filterQ) =
+  _<:chooseOne(allFiltersParallel(filterFreq,filterQ),filterType);
+
+chooseOne(proc,N) = // choose the Nth processor out of a list of processors with one output each
+  proc
+  // : par(i, maxN, control(i==clampedN)*(i==clampedN)):>_ // only actually run one of the procs
+  : par(i, maxN, _ *(i==clampedN)):>_ // run them all, but mute all but one
+with {
+  clampedN = int(min(N,maxN-1));
+  maxN = outputs(proc);
+};
+
+allFiltersParallel(f,q) =
+  _
+, svf.lp(f,q)
+, svf.bp(f,q)
+, svf.hp(f,q)
+, svf.notch(f,q)
+, svf.peak(f,q)
+, svf.ap(f,q);
+// ;
+allOscsParallel(fund,index,res) =
+  CZsawPAA(fund, index)
 , CZsquarePAA(fund, index)
 , CZpulsePAA(fund, index)
 , CZsinePulsePAA(fund, index)
@@ -13,14 +55,133 @@ process(fund,index,res) =
 , CZresTriangleAA(fund,res)
 , CZresTrapAA(fund, res);
 
+
+
 // params:
 // osc type
 // filter type
 // filter freq
 // filter q
 // osc index
+// osc res
 // osc octave
 // osc phase
+//
+//
+// TODO: PR sineNoise, credit/ask?
+// include subSynth?
+
+
+///////////////////////////////////////////////////////////////////////////////
+//                                    GUI                                    //
+///////////////////////////////////////////////////////////////////////////////
+
+// type = hslider("type[scale:int][style:menu{'Sine-Noise':0;'Sawtooth':1;'Square':2;'Pulse':3;'Sine-Pulse':4;'Half Sine':5;'Resonant Saw':6;'Resonant Tri':7;'Resonant Trap':8}]", 2, 0, 8, 1);
+oscType = hslider("[0] oscillator type[scale:int][style:menu{'Sine-Noise':0;'Sawtooth':1;'Square':2;'Pulse':3;'Sine-Pulse':4;'Half Sine':5;'Resonant Saw':6;'Resonant Tri':7;'Resonant Trap':8}]", 2, 0, 8, 1);
+filterType = hslider("[1] filter type[scale:int]
+[style:menu
+    {
+    'none':0;
+    'lp':1;
+    'bp':2;
+    'hp':3;
+	'notch':4;
+	'peak':5;
+	'ap':6
+    }
+]", 0, 0, 6, 1);
+
+filterFreq = hslider("[2] filter freq[scale:log]", 24000, 20, 24000, 1);
+filterQ = hslider("[3] filter Q", 1, 0.001, 10, 0.001);
+// an osc has either index or res, never both, so using the same [number] is OK
+index = hslider("[4] index", 0, 0, 1, stepsize);
+res   = hslider("[4] res", 0, 0, 64, stepsize);
+oct   = hslider("[5] octave", 0, minOct, maxOct, stepsize);
+phase = hslider("[6] phase", 0, -64, 64, stepsize);
+freq = hslider("[7]freq", 440, 20, 24000, 1);
+reset = button("[8]reset oscillator");
+
+///////////////////////////////////////////////////////////////////////////////
+//                                 constants                                 //
+///////////////////////////////////////////////////////////////////////////////
+
+minOct = -8;
+maxOct = 4;
+
+// fast
+// stepsize = 0.1;
+// medium
+stepsize = 0.01;
+// smooth
+// stepsize = 0.001;
+
+///////////////////////////////////////////////////////////////////////////////
+//           not yet in my version of faust, but merged in master:           //
+///////////////////////////////////////////////////////////////////////////////
+
+lf_sawpos_phase_reset(freq,phase,reset) = lf_sawpos_reset(freq,reset) + phase : ma.frac;
+lf_sawpos_reset(freq,reset) = ma.frac * (reset == 0) ~ +(freq/ma.SR);
+
+
+declare svf author "Oleg Nesterov";
+declare svf copyright "Copyright (C) 2020 Oleg Nesterov <oleg@redhat.com>";
+declare svf license "MIT-style STK-4.3 license";
+
+svf = environment {
+	    svf(T,F,Q,G) = tick ~ (_,_) : !,!,si.dot(3, mix)
+	    with {
+		tick(ic1eq, ic2eq, v0) =
+		  2*v1 - ic1eq,
+		  2*v2 - ic2eq,
+		  v0, v1, v2
+		with {
+		v1 = ic1eq + g *(v0-ic2eq) : /(1 + g*(g+k));
+		v2 = ic2eq + g * v1;
+	  };
+
+		A = pow(10.0, G/40.0);
+
+		g = tan(F * ma.PI/ma.SR) : case {
+			  (7) => /(sqrt(A));
+			  (8) => *(sqrt(A));
+			  (t) => _;
+		    } (T);
+
+		k = case {
+			  (6) => 1/(Q*A);
+			  (t) => 1/Q;
+		    } (T);
+
+		mix = case {
+			    (0) => 0, 0, 1;
+			    (1) => 0, 1, 0;
+			    (2) => 1, -k, -1;
+			    (3) => 1, -k, 0;
+			    (4) => 1, -k, -2;
+			    (5) => 1, -2*k, 0;
+			    (6) => 1, k*(A*A-1), 0;
+			    (7) => 1, k*(A-1), A*A-1;
+			    (8) => A*A, k*(1-A)*A, 1-A*A;
+		      } (T);
+	  };
+
+	    // External API
+	    lp(f,q)     = svf(0, f, q, 0);
+	    bp(f,q)     = svf(1, f, q, 0);
+	    hp(f,q)     = svf(2, f, q, 0);
+	    notch(f,q)  = svf(3, f, q, 0);
+	    peak(f,q)   = svf(4, f, q, 0);
+	    ap(f,q)     = svf(5, f, q, 0);
+	    bell(f,q,g) = svf(6, f, q, g);
+	    ls(f,q,g)   = svf(7, f, q, g);
+	    hs(f,q,g)   = svf(8, f, q, g);
+      };
+
+///////////////////////////////////////////////////////////////////////////////
+//            https://github.com/grame-cncm/faustlibraries/pull/64           //
+//            CZ Oscillators: add anti-aliased versions                      //
+///////////////////////////////////////////////////////////////////////////////
+
 
 
 //===================== Casio CZ Oscillators ==========================
@@ -86,7 +247,7 @@ CZsaw(fund, index) = CZ.saw(fund, index);
 // <https://forum.pdpatchrepo.info/topic/5992/casio-cz-oscillators>
 // Ported from pd to Faust by Bart Brouns
 
-CZsawAA(fund, index) = CZ.sawPAA(fund, index);
+CZsawAA(fund, index) = CZ.sawAA(fund, index);
 
 //----------`(os.)CZsawP`----------
 // Oscillator that mimics the Casio CZ saw oscillator,
@@ -182,7 +343,7 @@ CZsquare(fund, index) = CZ.square(fund, index);
 // <https://forum.pdpatchrepo.info/topic/5992/casio-cz-oscillators>
 // Ported from pd to Faust by Bart Brouns
 
-CZsquareAA(fund, index) = CZ.square(fund, index);
+CZsquareAA(fund, index) = CZ.squareAA(fund, index);
 
 //----------`(os.)CZsquareP`----------
 // Oscillator that mimics the Casio CZ square oscillator,
@@ -278,7 +439,7 @@ CZpulse(fund, index) = CZ.pulse(fund, index);
 // <https://forum.pdpatchrepo.info/topic/5992/casio-cz-oscillators>
 // Ported from pd to Faust by Bart Brouns
 
-CZpulseAA(fund, index) = CZ.pulse(fund, index);
+CZpulseAA(fund, index) = CZ.pulseAA(fund, index);
 
 //----------`(os.)CZpulseP`----------
 // Oscillator that mimics the Casio CZ pulse oscillator,
@@ -374,7 +535,7 @@ CZsinePulse(fund, index) = CZ.sinePulse(fund, index);
 // <https://forum.pdpatchrepo.info/topic/5992/casio-cz-oscillators>
 // Ported from pd to Faust by Bart Brouns
 
-CZsinePulseAA(fund, index) = CZ.sinePulse(fund, index);
+CZsinePulseAA(fund, index) = CZ.sinePulseAA(fund, index);
 
 //----------`(os.)CZsinePulseP`----------
 // Oscillator that mimics the Casio CZ sine/pulse oscillator,
@@ -664,78 +825,78 @@ CZresTrapAA(fund, res) = CZ.resTrapAA(fund, res);
 
 CZ = environment {
 
-    saw(fund, index) = sawChooseP(fund, index, 0);
-    sawP(fund, index) = sawChooseP(fund, index, 1);
-    sawAA(fund, index) = saw(fund, indexAA(fund, index));
-    sawPAA(fund, index) = sawP(fund, indexAA(fund, index));
-    sawChooseP(fund, index, p) =
-      (((FUND(fund,align,p)*((.5-INDEX)/INDEX)),(-1*FUND(fund,align,p)+1)*((.5-INDEX)/(1-INDEX))):min+FUND(fund,align,p))*2*ma.PI:cos
-    with {
-      INDEX = (.5-(index*.5)):max(0.01):min(0.5);
-      align = si.interpolate(index, 0.75, 0.5);
-    };
+       saw(fund, index) = sawChooseP(fund, index, 0);
+       sawP(fund, index) = sawChooseP(fund, index, 1);
+       sawAA(fund, index) = saw(fund, indexAA(fund, index));
+       sawPAA(fund, index) = sawP(fund, indexAA(fund, index));
+       sawChooseP(fund, index, p) =
+         (((FUND(fund,align,p)*((.5-INDEX)/INDEX)),(-1*FUND(fund,align,p)+1)*((.5-INDEX)/(1-INDEX))):min+FUND(fund,align,p))*2*ma.PI:cos
+       with {
+         INDEX = (.5-(index*.5)):max(0.01):min(0.5);
+         align = si.interpolate(index, 0.75, 0.5);
+       };
 
-    square(fund, index) = squareChooseP(fund, index, 0);
-    squareP(fund, index) = squareChooseP(fund, index, 1);
-    squareAA(fund, index) = square(fund, indexAA(fund, index));
-    squarePAA(fund, index) = squareP(fund, indexAA(fund, index));
-    squareChooseP(fund, index, p) = (FUND(fund,align,p)>=0.5), (ma.decimal((FUND(fund,align,p)*2)+1)<:_-min(_,(-1*_+1)*((INDEX)/(1-INDEX)))) :+ *ma.PI:cos
-    with {
-      INDEX = (index:pow(0.25)):max(0):min(1);
-      align = si.interpolate(INDEX, -0.25, 0);
-    };
+       square(fund, index) = squareChooseP(fund, index, 0);
+       squareP(fund, index) = squareChooseP(fund, index, 1);
+       squareAA(fund, index) = square(fund, indexAA(fund, index));
+       squarePAA(fund, index) = squareP(fund, indexAA(fund, index));
+       squareChooseP(fund, index, p) = (FUND(fund,align,p)>=0.5), (ma.decimal((FUND(fund,align,p)*2)+1)<:_-min(_,(-1*_+1)*((INDEX)/(1-INDEX)))) :+ *ma.PI:cos
+       with {
+         INDEX = (index:pow(0.25)):max(0):min(1);
+         align = si.interpolate(INDEX, -0.25, 0);
+       };
 
-    pulse(fund, index) = pulseChooseP(fund, index, 0);
-    pulseP(fund, index) = pulseChooseP(fund, index, 1);
-    pulseAA(fund, index) = pulse(fund, indexAA(fund, index));
-    pulsePAA(fund, index) = pulseP(fund, indexAA(fund, index));
-    pulseChooseP(fund, index, p) = ((FUND(fund,align,p)-min(FUND(fund,align,p),((-1*FUND(fund,align,p)+1)*(INDEX/(1-INDEX)))))*2*ma.PI):cos
-    with {
-      INDEX = index:min(0.99):max(0);
-      align = si.interpolate(index, -0.25, 0.0);
-    };
+       pulse(fund, index) = pulseChooseP(fund, index, 0);
+       pulseP(fund, index) = pulseChooseP(fund, index, 1);
+       pulseAA(fund, index) = pulse(fund, indexAA(fund, index));
+       pulsePAA(fund, index) = pulseP(fund, indexAA(fund, index));
+       pulseChooseP(fund, index, p) = ((FUND(fund,align,p)-min(FUND(fund,align,p),((-1*FUND(fund,align,p)+1)*(INDEX/(1-INDEX)))))*2*ma.PI):cos
+       with {
+         INDEX = index:min(0.99):max(0);
+         align = si.interpolate(index, -0.25, 0.0);
+       };
 
-    sinePulse(fund, index) = sinePulseChooseP(fund, index, 0);
-    sinePulseP(fund, index) = sinePulseChooseP(fund, index, 1);
-    sinePulseAA(fund, index) = sinePulse(fund, indexAA(fund, index));
-    sinePulsePAA(fund, index) = sinePulseP(fund, indexAA(fund, index));
-    sinePulseChooseP(fund, index, p) = (min(FUND(fund,align,p)*((0.5-INDEX)/INDEX),(-1*FUND(fund,align,p)+1)*((.5-INDEX)/(1-INDEX)))+FUND(fund,align,p))*4*ma.PI:cos
-    with {
-      INDEX = ((index*-0.49)+0.5);
-      align = si.interpolate(index, -0.125, -0.25);
-    };
+       sinePulse(fund, index) = sinePulseChooseP(fund, index, 0);
+       sinePulseP(fund, index) = sinePulseChooseP(fund, index, 1);
+       sinePulseAA(fund, index) = sinePulse(fund, indexAA(fund, index));
+       sinePulsePAA(fund, index) = sinePulseP(fund, indexAA(fund, index));
+       sinePulseChooseP(fund, index, p) = (min(FUND(fund,align,p)*((0.5-INDEX)/INDEX),(-1*FUND(fund,align,p)+1)*((.5-INDEX)/(1-INDEX)))+FUND(fund,align,p))*4*ma.PI:cos
+       with {
+         INDEX = ((index*-0.49)+0.5);
+         align = si.interpolate(index, -0.125, -0.25);
+       };
 
-    halfSine(fund, index) = halfSineChooseP(fund, index, 0);
-    halfSineP(fund, index) = halfSineChooseP(fund, index, 1);
-    halfSineAA(fund, index) = halfSine(fund, indexAA(fund, index));
-    halfSinePAA(fund, index) = halfSineP(fund, indexAA(fund, index));
-    halfSineChooseP(fund, index, p) = (select2(FUND(fund,align,p)<.5, .5*(FUND(fund,align,p)-.5)/INDEX+.5, FUND(fund,align,p)):min(1))*2*ma.PI:cos
-    with {
-      INDEX = (.5-(index*0.5)):min(.5):max(.01);
-      align = si.interpolate(index:min(0.975), -0.25, -0.5);
-    };
+       halfSine(fund, index) = halfSineChooseP(fund, index, 0);
+       halfSineP(fund, index) = halfSineChooseP(fund, index, 1);
+       halfSineAA(fund, index) = halfSine(fund, indexAA(fund, index));
+       halfSinePAA(fund, index) = halfSineP(fund, indexAA(fund, index));
+       halfSineChooseP(fund, index, p) = (select2(FUND(fund,align,p)<.5, .5*(FUND(fund,align,p)-.5)/INDEX+.5, FUND(fund,align,p)):min(1))*2*ma.PI:cos
+       with {
+         INDEX = (.5-(index*0.5)):min(.5):max(.01);
+         align = si.interpolate(index:min(0.975), -0.25, -0.5);
+       };
 
-    FUND =
-      case {
-        (fund,align,0) => fund;
-        (fund,align,1) => (fund+align) : ma.frac; // align phase with fund
-      };
-    resSaw(fund,res) = (((-1*(1-fund))*((cos((ma.decimal((max(1,res)*fund)+1))*2*ma.PI)*-.5)+.5))*2)+1;
-    resSawAA(fund, res) = resSaw(fund, resAA(fund, res));
-    resTriangle(fund, res) = select2(fund<.5, 2-(fund*2), fund*2)*RES*2-1
-    with {
-      RES = ((fund*(res:max(1)))+1:ma.decimal)*2*ma.PI:cos*.5+.5;
-    };
-    resTriangleAA(fund, res) = resTriangle(fund, resAA(fund, res));
-    resTrap(fund, res) = (((1-fund)*2):min(1)*sin(ma.decimal(fund*(res:max(1)))*2*ma.PI));
-    resTrapAA(fund,  res) = resTrap(fund,resAA(fund,  res));
+       FUND =
+         case {
+           (fund,align,0) => fund;
+           (fund,align,1) => (fund+align) : ma.frac; // align phase with fund
+         };
+       resSaw(fund,res) = (((-1*(1-fund))*((cos((ma.decimal((max(1,res)*fund)+1))*2*ma.PI)*-.5)+.5))*2)+1;
+       resSawAA(fund, res) = resSaw(fund, resAA(fund, res));
+       resTriangle(fund, res) = select2(fund<.5, 2-(fund*2), fund*2)*RES*2-1
+       with {
+         RES = ((fund*(res:max(1)))+1:ma.decimal)*2*ma.PI:cos*.5+.5;
+       };
+       resTriangleAA(fund, res) = resTriangle(fund, resAA(fund, res));
+       resTrap(fund, res) = (((1-fund)*2):min(1)*sin(ma.decimal(fund*(res:max(1)))*2*ma.PI));
+       resTrapAA(fund,  res) = resTrap(fund,resAA(fund,  res));
 
-    fund2freq(fund)        = ((fund-fund')*ma.SR) : ba.sAndH(abs(fund-fund')<0.5);
-    indexAA(index,fund) =  // Anti Alias => lower the index for higher freqs
-      index*(1-
-             (( (fund2freq(fund)-(ma.SR/256))
-                / (ma.SR/8))
-              :max(0):min(1)
-             ));
-    resAA(fund,res) = res*fund2freq(fund):max(0):min(ma.SR/4)/fund2freq(fund);
-};
+       fund2freq(fund)        = ((fund-fund')*ma.SR) : ba.sAndH(abs(fund-fund')<0.5);
+       indexAA(fund,index) =  // Anti Alias => lower the index for higher freqs
+         index*(1-
+                (( (fund2freq(fund)-(ma.SR/256))
+                   / (ma.SR/8))
+                 :max(0):min(1)
+                ));
+       resAA(fund,res) = res*fund2freq(fund):max(0):min(ma.SR/4)/fund2freq(fund);
+     };
