@@ -70,7 +70,8 @@ allFiltersParallel(f,q) =
 , svf.ap(f,q);
 
 allOscsParallel(fund,index,res) =
-  CZsawPAA(fund, index)
+  sineNoise(fund,index)
+, CZsawPAA(fund, index)
 , CZsquarePAA(fund, index)
 , CZpulsePAA(fund, index)
 , CZsinePulsePAA(fund, index)
@@ -105,7 +106,22 @@ octaveMultiplier =
 
 minOctMult = minOct:octaveMultiplier;
 
-
+// When index is 0, you hear a sine, just like with all the other oscillators.
+// When index is between 0 and 0.5, it smoothly morphs into band-pass noise at the freq of the oscillator.
+// When index is between 0.5 and 1, it crossfades into low-pass noise.
+sineNoise(fund,index) =
+  it.interpolate_linear
+  ( (index*2:max(1)-1)
+  , (fund*2*ma.PI:sin*(it.interpolate_linear(index*2:min(1),1,lfnoiseF(fund))))
+  , lfnoiseF(fund)
+  )
+with {
+  index2freq(i)        = ((i-i')*ma.SR) : ba.sAndH(abs(i-i')<0.5):int :max(20):min(ma.SR*.5);
+  NF = index2freq(fund) :int :max(20):min(ma.SR*.25);
+  lfnoise0F(fund) = no.noise : ba.latch((fund:ma.decimal)<0.5);
+  lfnoiseNF(N,fund) = lfnoise0F(fund) : fi.lowpass(N,index2freq(fund) ); // Nth-order Butterworth lowpass
+  lfnoiseF(fund) = lfnoise0F(fund) : seq(i,5,fi.lowpass(1,index2freq(fund))); // non-overshooting lowpass
+};
 
 // params:
 // osc type
@@ -118,7 +134,9 @@ minOctMult = minOct:octaveMultiplier;
 // osc phase
 //
 //
-// TODO: PR sineNoise, credit/ask?
+// TODO:
+// fix click in oct
+//PR sineNoise, credit/ask?
 // include subSynth?
 // make brightness vs index correction, maybe PR
 
