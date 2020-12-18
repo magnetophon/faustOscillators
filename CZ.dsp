@@ -4,20 +4,44 @@ declare name "CZoscs";
 import("stdfaust.lib");
 
 process =
-  // basicCZosc(oscType,index,res,phase,reset,freq);
-  prefilterCZosc(oscType,filterType,filterFreq,filterQ,index,res,phase,reset,freq);
+  full<:(_,_);
+// basic ,medium full;
 
-prefilterCZosc(oscType,filterType,filterFreq,filterQ,index,res,phase,reset,freq) =
-  (
-    ( fund(freq,phase,reset) : filterChooser(filterType,filterFreq,filterQ))
-   ,index
-   ,res
-  )
+
+// "basic" is an almost normal CZ oscillator.
+// I did a PR for it to faustlibraries, but for convenience, I pasted the code below,
+// from the line marked with "Casio CZ Oscillators"
+// It is documented more thoroughly there, but basically, it has the following changes:
+// - it is phase alligned to a master oscillator called "fund"
+// - it's anti-aliased by decreasing the index at higher frequencies.
+basic =
+  fund(freq,phase,reset)
+  : basicCZosc(oscType,index,res);
+
+// Like basic, but  adds a filter between the master oscillator and the CZ oscillator.
+medium =
+  fund(freq,phase,reset)
+  : prefilterCZosc(oscType,filterType,filterFreq,filterQ,index,res);
+
+// Like medium, but can crossfade between octaves
+full =
+  fund(freq*minOctMult,phase,reset)
+  : prefilterOctaveCZosc(oscType,filterType,filterFreq,filterQ,index,res,oct) ;
+
+basicCZosc(oscType,index,res,fund) =
+  (fund,index,res)
   : oscillatorChooser(oscType);
 
-basicCZosc(oscType,index,res,phase,reset,freq) =
-  (fund(freq,phase,reset),index,res)
-  : oscillatorChooser(oscType);
+prefilterCZosc(oscType,filterType,filterFreq,filterQ,index,res,fund) =
+  fund
+  : filterChooser(filterType,filterFreq,filterQ)
+  : basicCZosc(oscType,index,res);
+
+prefilterOctaveCZosc(oscType,filterType,filterFreq,filterQ,index,res,oct,fund) =
+  fund
+  :oscOctaver
+   ( oct
+   , prefilterCZosc(oscType,filterType,filterFreq,filterQ,index,res));
 
 fund(freq,phase,reset) = lf_sawpos_phase_reset(freq,phase,reset);
 
@@ -44,7 +68,7 @@ allFiltersParallel(f,q) =
 , svf.notch(f,q)
 , svf.peak(f,q)
 , svf.ap(f,q);
-// ;
+
 allOscsParallel(fund,index,res) =
   CZsawPAA(fund, index)
 , CZsquarePAA(fund, index)
@@ -54,6 +78,32 @@ allOscsParallel(fund,index,res) =
 , CZresSawAA(fund,res)
 , CZresTriangleAA(fund,res)
 , CZresTrapAA(fund, res);
+
+oscOctaver(oct,oscil,fund) =
+  (
+    (f0:oscil)
+   ,(f1:oscil)
+  ):si.interpolate(oct:abs%1)
+with {
+  f0 = (fund+phaseM(oct0):ma.frac):octaveSwitcher(oct0);
+  f1 = (fund+phaseM(oct1):ma.frac):octaveSwitcher(oct1);
+  oct0 = oct:floor+((oct<0) & (oct!=(oct:floor)));
+  oct1 = oct:floor+(oct>0);
+  octaveSwitcher(oct) = _*(octaveMultiplier(oct)/minOctMult)%1;
+  phaseM(oct) = phase*octMult(oct);
+  octMult(oct)=
+    octaveMultiplier(minOct)/(1/pow(2,oct*-1));
+};
+
+octaveMultiplier =
+  int<:
+  (
+    (_ <0) / pow(2,abs),
+    (_==0),
+    (_ >0) * pow(2,_)
+  ):>_;
+
+minOctMult = minOct:octaveMultiplier;
 
 
 
@@ -70,6 +120,7 @@ allOscsParallel(fund,index,res) =
 //
 // TODO: PR sineNoise, credit/ask?
 // include subSynth?
+// make brightness vs index correction, maybe PR
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -91,14 +142,14 @@ filterType = hslider("[1] filter type[scale:int]
     }
 ]", 0, 0, 6, 1);
 
-filterFreq = hslider("[2] filter freq[scale:log]", 24000, 20, 24000, 1);
-filterQ = hslider("[3] filter Q", 1, 0.001, 10, 0.001);
+filterFreq = hslider("[2] filter freq[scale:log]", 24000, 20, 24000, 1) :si.smoo;
+filterQ = hslider("[3] filter Q", 1, 0.001, 10, 0.001) :si.smoo;
 // an osc has either index or res, never both, so using the same [number] is OK
-index = hslider("[4] index", 0, 0, 1, stepsize);
-res   = hslider("[4] res", 0, 0, 64, stepsize);
-oct   = hslider("[5] octave", 0, minOct, maxOct, stepsize);
-phase = hslider("[6] phase", 0, -64, 64, stepsize);
-freq = hslider("[7]freq", 440, 20, 24000, 1);
+index = hslider("[4] index", 0, 0, 1, stepsize) :si.smoo;
+res   = hslider("[4] res", 0, 0, 64, stepsize) :si.smoo;
+oct   = hslider("[5] octave", 0, minOct, maxOct, stepsize) :si.smoo;
+phase = hslider("[6] phase", 0, -64, 64, stepsize) :si.smoo;
+freq = hslider("[7]freq", 440, 20, 24000, 1) :si.smoo;
 reset = button("[8]reset oscillator");
 
 ///////////////////////////////////////////////////////////////////////////////
