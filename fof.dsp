@@ -2,6 +2,7 @@ declare author "Bart Brouns";
 declare license "GPLv3";
 declare name "fof";
 import("stdfaust.lib");
+import("CZ.lib");
 
 // process =
 // fof;
@@ -32,6 +33,9 @@ oscpr(f0,c) =
          , os.sinwaveform(pl.tablesize)
          , int(ph(f0,c)));
 
+oscpr2(f0,c) =
+  fund(f0,0,c)
+  : basicCZosc(oscType,index,res);
 // sinwaveform 	= float(time)*(2.0*PI)/float(tablesize) : sin;
 // sinwaveform(tablesize) = float(ba.time)*(2.0*ma.PI)/float(tablesize) : sin;
 ///////////////////////////////////////////////////////////////////////////////
@@ -41,10 +45,7 @@ oscpr(f0,c) =
 // function to generate a single Formant-Wave-Function
 fof(fc,bw,a,g) =
   _ <: (_',_)
-  :
-  (f
-   * s
-  )
+  : (f * s)
 with {
   T
   = 1/ma.SR;
@@ -59,7 +60,7 @@ with {
   b0 = g/G0;
   // normalized filter gain
   s
-  = oscpr(fc);
+  = oscpr2(fc);
   // wavetable oscillator
   f
   = fi.tf2(b0,0,0,a1,a2); // biquad filter
@@ -102,18 +103,15 @@ fofSH =
 
 /************** parameters/GUI controls **************/
 // fundamental freq (in Hz)
-f0 = hslider("f0",220,0,2000,0.01);
+f0 = hslider("f0",220,0,2000,0.01):si.smoo;
 // formant center freq (in Hz)
-fc = hslider("Fc",800,100,6000,0.01);
+fc = hslider("Fc",800,100,6000,0.01):si.smoo;
 // FOF filter gain (in dB)
-g = ba.db2linear(hslider("Gain",0,-40,40,0.01));
+g = ba.db2linear(hslider("Gain",0,-40,40,0.01)):si.smoo;
 // FOF bandwidth (in Hz)
-bw = hslider("BW",80,1,10000,1);
+bw = hslider("BW",80,1,10000,1):si.smoo;
 // FOF attack value (in Hz)
-a = hslider("A",90,1,10000,1);
-// number of S&H cycling filters
-n = 5;
-c = hslider("c", 0, 0, 1, 0.01);
+a = hslider("A",90,1,10000,1):si.smoo;
 
 
 // main process
@@ -122,8 +120,19 @@ process =
   // rdtable(pl.tablesize, (ba.time:os.sinwaveform), int(ph(f0,c)))
 
 
-  clkCycle(n,f0)
+  clkCycle(multi,f0)
   <:
-  par(i,n,fofSH)
+  par(i,multi,fofSH*OctMuliply(i))
   :> _
 ;
+
+OctMuliply(i) =
+  (OctMuliplyPart(i,floor(octaviation+1))*    ma.decimal(octaviation)) +
+  (OctMuliplyPart(i,floor(octaviation  ))* (1-ma.decimal(octaviation)));
+OctMuliplyPart(i,oct) = select2(i>0,1,
+                                (((i % int(2:pow(oct)))):min(1)*-1)+1
+                                 );
+
+multi = 2:pow(maxOctavation);
+maxOctavation             = 4;
+octaviation = hslider("octaviation",0,0,maxOctavation,0.001):si.smoo;
