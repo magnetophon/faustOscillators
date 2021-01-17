@@ -306,9 +306,19 @@ OLDfofosc(fund,octavation) =
   :> _ * (octaviation+1) ;
 
 fofosc(fund,octavation) =
-  clkCycle(multi,fund)
-  <: par(i,multi,myFOF(fund)*OctMuliply(i))
-  :> _ * (octaviation:max(1)/maxOctavation) ;
+  (
+    clkCycle(multi,fund)
+    <: par(i,multi,myFOF(fund)*OctMuliply(i))
+    :> _ * (octaviation:max(1)/maxOctavation)
+  )
+  // ,(fund2freq(fund):hbargraph("frequ", 20, 24000))
+;
+
+fund2freq(fund) = delta*ma.SR
+with {
+  absDelta = abs(fund-fund');
+  delta =  select2(absDelta>0.5,absDelta,1-absDelta);
+};
 
 myFOF(fund,fofTrig) =
   fofEnv(fund,fofTrig:ba.impulsify)*fofSlaveOsc(fofTrig);
@@ -318,8 +328,9 @@ fofEnv(fund,fofTrig) =
   curved_ar(fund,attack,release,ac,rc,fofTrig) ;
 // attack = hslider("attack", 0, 0, 1, 0.001):pow(2);
 // decay = hslider("decay", 0, 0, 1, 0.001):pow(2);
-attack = hslider("attack", 2, 1, maxOctavation+1, 0.001):pow(2);
-release = hslider("release", 2, 1, maxOctavation+1, 0.001):pow(2);
+attack= hslider("attack", 2, 0.001, multi, 0.001);
+release= hslider("release", 2, 0.001, multi, 0.001);
+// attack = select2(AplusR>multi,attack);
 // release = hslider("release", 0, 0, 1, 0.001);
 ac = hslider("ac", 0, -1, 1, 0.01);
 rc = hslider("rc", 0, -1, 1, 0.01);
@@ -356,6 +367,7 @@ with {
   fadeVal = theRamp:LOGshaper;
   theRamp = ramp(samples,trig);
   samples = int(length(state) * ma.SR);
+
   length(state) = select2(state,r,a);
   trig = trigAttack, trigRelease :> _>0;
   trigRelease =
@@ -405,14 +417,16 @@ with {
   trigAttack= gate:ba.impulsify;
   attackRamp = ramp(attSamples,trigAttack);
   // attSamples = int(a * ma.SR);
-  attSamples = int( a * ma.SR / fund2freq(fund) );
-
+  // attSamples = int( a * ma.SR / fund2freq(fund) );
+  attSamples   = int( att * ma.SR / fund2freq(fund) );
+  att = (a/scale);
+  scale = ((a+r)/multi):max(1);
   // TODO: make work with neg freq
-  fund2freq(fund) = 1/delta
-  with {
-    absDelta = abs(fund-fund');
-    delta =  select2(absDelta>0.5,absDelta,1-absDelta);
-  };
+  // fund2freq(fund) = 1/delta
+  // with {
+  // absDelta = abs(fund-fund');
+  // delta =  select2(absDelta>0.5,absDelta,1-absDelta);
+  // };
 
   LINenvelope = it.interpolate_linear(theRamp,from,to(state));
   LOGenvelope = it.interpolate_linear(theRamp:LOGshaper,from,to(state));
@@ -429,7 +443,7 @@ with {
   // samples = int(length(state) * ma.SR);
   // samples = int(length(state) * ma.SR);
   samples = int( length(state) * ma.SR / fund2freq(fund) );
-  length(state) = select2(state,r,a);
+  length(state) = select2(state,r,a)/scale;
   trig = trigAttack, trigRelease :> _>0;
   trigRelease =
     (((prevState==1) & (attackRamp ==1)):ba.impulsify)  // doesn not auto-impulsify because prev will NOT increase
