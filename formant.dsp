@@ -4,32 +4,34 @@ declare name "formantOscs";
 import("stdfaust.lib");
 
 process =
-  PAF(center,fund(freq,phase,reset),pafIndex,1)
-  // ,
-  // fuphoSlave(fund(freq,phase,reset),freq,1,FMindex,formantFreq)
-  // ,
-  // fofosc(fund(freq,phase,reset),octavation)
-  // fofSlaveOsc(reset)
-  :_<:(_,_)
-;
-
-
+  (fund(freq,phase,reset):PAF(center,pafIndex,1))
+,
+  (fund(freq,phase,reset):FMformant(FMindex,formantFreq))
+,
+  fofosc(fund(freq,phase,reset),octavation)
+  // :_<:(_,_)
+   ;
 
 formantFreq = hslider("formant frequency", 440, 27.5, 3520, 0.1):si.smoo;
-FMindex = hslider("[2]FM index[tooltip: FM index of the lowest oscillator]",	1, 0, 20, 0.001):max(0.00000001):si.smoo;
+FMindex = hslider("[2]FM index",	1, 0, 20, 0.001):si.smoo;
 
+fund2freq(fund) = delta*ma.SR
+with {
+  absDelta = abs(fund-fund');
+  delta = select2(absDelta>0.5,absDelta,1-absDelta);
+};
 // phase = hslider("phase", 0, 0, 1, 0.001):si.smoo;
 //-----------------------------------------------
 // PAF oscilator
 //-----------------------------------------------
 // http://msp.ucsd.edu/techniques/v0.11/book-html/node96.html
 //
-center = formantFreq / freq;
+center = formantFreq / abs(freq);
 pafIndex = hslider("[0]PAF index[tooltip: PAF index]",	100, 0.001, 100, 0.001):si.smoo;
 // deglitch adapted from Chris Chafe:
 // http://chrischafe.net/glitch-free-fm-vocal-synthesis/
 // center, fund, index, volume
-PAF(c,f,i,v) =
+PAF(c,i,v,f) =
   BasicPAF(ef,f,i,ea)+
   BasicPAF(of,f,i,oa)
 with {
@@ -44,7 +46,6 @@ with {
   ea     = ba.if(isEven,comp,frac)*v; // even harmonic amplitude
 };
 
-sampleAndHold(sample) = select2((sample!=0)) ~ _;
 
 // center, fund, index, volume
 BasicPAF(c,f,i,v)=
@@ -62,6 +63,8 @@ with {
   wrap            = _<:(_>0,(_,1:fmod)+1,(_,1:fmod)):select2;
   centerWrap(c,f) = c:sampleAndHold(f)<:wrap;
   centerMin(c,f)  = c:sampleAndHold(f)-centerWrap(c,f);
+  // different from library ba.sAndH because that one has ``sample`` instead of ``sample!=0``
+  sampleAndHold(sample) = select2((sample!=0)) ~ _;
   cos12(c,f)      = (centerMin(c,f)*f<:(_*2*ma.PI:cos)<:(_,_((_,(_+f:(_*2*ma.PI:cos))):_-_:(_*centerWrap(c,f))) )):_+_;
   bell(f,i)       = (((f*0.5)-0.25:(_*2*ma.PI:cos))*i)+100:bellcurve;
 };
@@ -75,7 +78,6 @@ with {
 // declare license		"BSD";
 // declare copyright	"stk";
 
-// import("stdfaust.lib");
 
 // ------ Program A of "Glitch Free FM Vocal Synthesis" (minor corrections from article)
 
@@ -102,13 +104,12 @@ with {
 //      formant generator using uniform (phase-synchronous) oscillators      //
 ///////////////////////////////////////////////////////////////////////////////
 
-// synced to an external phaser "index"
+// synced to an external phaser "fund"
 // the parameter eo sets the proportion of even and odd harmonics.
-fuphoSlave(index,f0,a,b,c) = (even+odd):*(a)	// outputs the sum of bracketing harmonics
+FMformant(b,c,fund) = even+odd	// outputs the sum of bracketing harmonics
 with {					// from f0, amp, bandwidth, center freq
-  okt = vslider("okt", 0, -2, 2, 1);
+  f0 = fund2freq(fund);
   cf 	= c/f0;
-  // cf 	= c/(f0*(okt:octaveMultiplier));
   ci	= int(floor(cf));			// integer harmonic below center freq
   ci1	= ci+1;				// and above
   isEven= ba.if(((ci%2)<1),1,0);	// below is even?
@@ -118,10 +119,9 @@ with {					// from f0, amp, bandwidth, center freq
   comp	= 1-frac;
   oa 	= ba.if(isEven,frac,comp);		// odd harmonic amplitude
   ea 	= ba.if(isEven,comp,frac);		// even harmonic amplitude
-  // ph 	= pha(f0);			// index signal at fundamental
-  m 	= tbl(sm,index):*(b);		// modulator sine signal
-  even 	= ea:*(tbl(sc,(dec(ef*index+m)))); // even harmonic signal with phase modulation
-  odd 	= oa:*(tbl(sc,(dec(of*index+m))));	// odd harmonic signal
+  m 	= tbl(sm,fund):*(b);		// modulator sine signal
+  even 	= ea:*(tbl(sc,(dec(ef*fund+m)))); // even harmonic signal with phase modulation
+  odd 	= oa:*(tbl(sc,(dec(of*fund+m))));	// odd harmonic signal
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -131,47 +131,19 @@ with {					// from f0, amp, bandwidth, center freq
 // declare author "Bart Brouns";
 // declare license "GPLv3";
 // declare name "fof";
+
 // import("CZ.lib");
 reset = button("reset");
 phase = hslider("phase", 0, -1, 1, 0.001):si.smoo;
-freq = hslider("freq", 440, -440 , 500, 0.1):si.smoo;
+freq = hslider("freq", 440, 27.5, 3520, 0.1):si.smoo;
 fund(freq,phase,reset) = lf_sawpos_phase_reset(freq,phase,reset);
 lf_sawpos_phase_reset(freq,phase,reset) = lf_sawpos_reset(freq,reset) + phase : ma.frac;
 lf_sawpos_reset(freq,reset) = ma.frac * (reset == 0) ~ +(freq/ma.SR);
+
+
+
 // adapted from:
 // https://ccrma.stanford.edu/~mjolsen/pdfs/smc2016_MOlsenFOF.pdf
-
-
-
-/////////////////////////////////////////////////////////////////////////////
-//                     Hard-Syncing Wavetable Oscillator                   //
-/////////////////////////////////////////////////////////////////////////////
-// resettable phasor, clock val > 0 resets phase to 0
-
-ph(f0,c)=
-  inc
-  :(+:d)~
-  (-(_<:(_,*(_,clk))))
-  :*(pl.tablesize)
-
-with {
-  clk = c>0;
-  d = ma.decimal;
-  inc = f0/float(ma.SR);
-};
-// sin lookup table with resettable phase
-oscpr(f0,c) =
-  rdtable(pl.tablesize
-         , os.sinwaveform(pl.tablesize)
-         , int(ph(f0,c)));
-
-/////////////////////////////////////////////////////////////////////////////
-//                     CZ osc for inside fof                               //
-/////////////////////////////////////////////////////////////////////////////
-
-oscpr2(f0,c) =
-  fund(f0,0,c)
-  : basicCZosc(oscType,index,res);
 
 ///////////////////////////////////////////////////////////////////////////////
 //                            FOF Generation System                          //
@@ -224,11 +196,11 @@ release= hslider("release", 2, 0.001, multi, 0.001):si.smoo;
 fofSlaveOsc(fofTrig) =
   // fund(formantFreq,0,fofTrig)
   // : basicCZosc(oscType,index,reset);
-  // rdtable(pl.tablesize
-  // , os.sinwaveform(pl.tablesize)
-  // , int(pl.tablesize * fund(formantFreq,0,fofTrig)));
-  fund(formantFreq,0,fofTrig)
-  *2*ma.PI:sin;
+  rdtable(pl.tablesize
+         , os.sinwaveform(pl.tablesize)
+         , int(pl.tablesize * fund(formantFreq,0,fofTrig)));
+// fund(formantFreq,0,fofTrig)
+// *2*ma.PI:sin;
 
 curved_ar(fund,a,r,gate) =
   FB~(_,_) // we need the previous state and value
@@ -247,11 +219,6 @@ with {
   att = (a/scale);
   scale = ((a+r)/multi):max(1);
   // TODO: make work with neg freq
-  fund2freq(fund) = delta*ma.SR
-  with {
-    absDelta = abs(fund-fund');
-    delta = select2(absDelta>0.5,absDelta,1-absDelta);
-  };
   envelope = it.interpolate_linear(theRamp:SINshaper,from,to(state));
   theRamp = ramp(samples,trig);
   SINshaper(x) = sin(ma.PI*(x-0.5))*0.5+0.5;
