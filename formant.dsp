@@ -4,13 +4,16 @@ declare name "formantOscs";
 import("stdfaust.lib");
 
 process =
-  (fund(freq,phase,reset):PAF(center,pafIndex,1))
-,
-  (fund(freq,phase,reset):FMformant(FMindex,formantFreq))
-,
-  fofosc(fund(freq,phase,reset),octavation)
+  fund(freq,phase,reset)<:
+  (
+    (PAF(center,pafIndex,1))
+    // ,
+    // (FMformant(FMindex,formantFreq))
+  ,
+    (FOFosc(octavation))
+  )
   // :_<:(_,_)
-   ;
+;
 
 formantFreq = hslider("formant frequency", 440, 27.5, 3520, 0.1):si.smoo;
 FMindex = hslider("[2]FM index",	1, 0, 20, 0.001):si.smoo;
@@ -27,7 +30,7 @@ with {
 // http://msp.ucsd.edu/techniques/v0.11/book-html/node96.html
 //
 center = formantFreq / abs(freq);
-pafIndex = hslider("[0]PAF index[tooltip: PAF index]",	100, 0.001, 100, 0.001):si.smoo;
+pafIndex = hslider("[0]PAF index[tooltip: PAF index]",	100, 0.001, 1000, 0.001):si.smoo;
 // deglitch adapted from Chris Chafe:
 // http://chrischafe.net/glitch-free-fm-vocal-synthesis/
 // center, fund, index, volume
@@ -51,22 +54,23 @@ with {
 BasicPAF(c,f,i,v)=
   (((cos12(c,f))*bell(f,i)) * v) * volumeCompensate
 with {
-  bellcurve(x) = rdtable(belltablesize + 1,curve,int(x*(belltablesize/200)))
-  with 	{
+  Nbellcurve(x) = curve(x*100);
+  bellcurve(x) = rdtable(belltablesize + 1,ba.time:curve,int(x*(belltablesize/200)):max(0):min(belltablesize));
   belltablesize 	= 1 << 16;
-  curve 	= ba.time:(((_-(belltablesize*0.5))/(belltablesize*0.125))<:exp((_*_)*-1));
+  curve 	= (((_-(belltablesize*0.5))/(belltablesize*0.125))<:exp((_*_)*-1));
   // belltablesize 	= 200;
   // curve 	= ba.time:(((_-100)/25)<:exp((_*_)*-1));
-};
-  volumeCompensate = 0.666+(i/300);
-  // volumeCompensate = 1;
+  // curve 	= ba.time:(((x-100)/25)<:exp((w*w)*-1));
+  // volumeCompensate = 0.666+(i/300);
+  volumeCompensate = 1;
   wrap            = _<:(_>0,(_,1:fmod)+1,(_,1:fmod)):select2;
   centerWrap(c,f) = c:sampleAndHold(f)<:wrap;
   centerMin(c,f)  = c:sampleAndHold(f)-centerWrap(c,f);
   // different from library ba.sAndH because that one has ``sample`` instead of ``sample!=0``
   sampleAndHold(sample) = select2((sample!=0)) ~ _;
   cos12(c,f)      = (centerMin(c,f)*f<:(_*2*ma.PI:cos)<:(_,_((_,(_+f:(_*2*ma.PI:cos))):_-_:(_*centerWrap(c,f))) )):_+_;
-  bell(f,i)       = (((f*0.5)-0.25:(_*2*ma.PI:cos))*i)+100:bellcurve;
+  // bell(f,i)       = (((f*0.5)-0.25:(_*4*ma.PI:cos))*i)+100:bellcurve;
+  bell(f,i)       = ((((f*0.5)-0.25)*2*ma.PI:cos)*i)+100:bellcurve;
 };
 //-----------------------------------------------
 // FM formant oscilator
@@ -151,34 +155,35 @@ lf_sawpos_reset(freq,reset) = ma.frac * (reset == 0) ~ +(freq/ma.SR);
 
 // function to generate a single Formant-Wave-Function
 ///////////////////////////////////////////////////////////////////////////////
-//                        Cyclic Impulse Train Streams                       //
-///////////////////////////////////////////////////////////////////////////////
+   //                        Cyclic Impulse Train Streams                       //
+   ///////////////////////////////////////////////////////////////////////////////
 
-// impulse train at frequency of fund
-// clk(fund) = (1-1')+(fund<:-(mem)<0)';
-clk(fund) = (1-1') +(
-              abs(fund-fund')>0.5
-            )';
-// impulse train at frequency f0 split into n cycles
-clkCycle(n,fund) = clk(fund) <: par(i,n,resetCtr(n,(i+1)));
-// function that lets through the mth impulse out of
-// each consecutive group of n impulses
-resetCtr(n,m) = _ <: (_,ctr(n)) : (_,(_==m)) : *;
-                                               // function to count nonzero inputs and reset after
-                                               // receiving x of them
-                                               ctr(x) = (+(_)~(negSub(x)));
-// function that subtracts value x from
-// input stream value if input stream value >= x
-negSub(x)= _<: (_>=x,_,_):((-1*_),_,_):((_*_),_):(_+_);
+   // impulse train at frequency of fund
+   // clk(fund) = (1-1')+(fund<:-(mem)<0)';
+   clk(fund) = (1-1') +(
+                 abs(fund-fund')>0.5
+               )';
+   // impulse train at frequency f0 split into n cycles
+   clkCycle(n,fund) = clk(fund) <: par(i,n,resetCtr(n,(i+1)));
+   // function that lets through the mth impulse out of
+   // each consecutive group of n impulses
+   resetCtr(n,m) = _ <: (_,ctr(n)) : (_,(_==m)) : *;
+                                                  // function to count nonzero inputs and reset after
+                                                  // receiving x of them
+                                                  ctr(x) = (+(_)~(negSub(x)));
+   // function that subtracts value x from
+   // input stream value if input stream value >= x
+   negSub(x)= _<: (_>=x,_,_):((-1*_),_,_):((_*_),_):(_+_);
 
 
-// main process
-fofosc(fund,octavation) =
-  (
-    clkCycle(multi,fund)
-    : par(i,multi,myFOF(fund)*OctMuliply(i))
-      :> _ * (octavation:max(1)/maxOctavation)
-  )
+   // main process
+   FOFosc(octavation,fund) =
+     (
+       clkCycle(multi,fund)
+       : par(i,multi,myFOF(fund)*OctMuliply(i))
+         :> _
+            // * (octavation:max(1)/maxOctavation)
+     )
 ;
 
 
