@@ -6,31 +6,50 @@ import("stdfaust.lib");
 process =
   fund(freq,phase,reset)<:
   (
-    (PAF(center,pafIndex,1))
-    // ,
-    // (FMformant(FMindex,formantFreq))
-  ,
-    (FOFosc(octavation))
-  )
-  // :_<:(_,_)
-;
+    oscChooser(oscTypeL)
+  , oscChooser(oscTypeR)
+  );
 
-formantFreq = hslider("formant frequency", 440, 27.5, 3520, 0.1):si.smoo;
-FMindex = hslider("[2]FM index",	1, 0, 20, 0.001):si.smoo;
 
+oscTypeL    = hslider ("[0] oscillator type left [scale:int][style:menu{'PAF':0;'FM':1;'FOF':2}]", 0, 0, 2, 1);
+oscTypeR    = hslider ("[1] oscillator type right[scale:int][style:menu{'PAF':0;'FM':1;'FOF':2}]", 1, 0, 2, 1);
+reset       = button  ("[2]reset");
+freq        = hslider ("[3]freq", 440, 27.5, 3520, 0.1)              :si.smoo;
+phase       = hslider ("[4]phase", 0, -1, 1, 0.001)                  :si.smoo;
+formantFreq = hslider ("[5]formant frequency", 440, 27.5, 3520, 0.1) :si.smoo;
+index       = hslider ("[6]index",	1, 0, 1, 0.001)                  :si.smoo;
+attack      = hslider ("[7]FOF attack", 2, 0.001, multi, 0.001)      :si.smoo;
+release     = hslider ("[8]FOF release", 2, 0.001, multi, 0.001)     :si.smoo;
+octavation  = hslider ("[9]FOF octavation",0,0,maxOctavation,0.001)  :si.smoo;
+
+///////////////////////////////////////////////////////////////////////////////
+//                                  general                                  //
+///////////////////////////////////////////////////////////////////////////////
+
+fund(freq,phase,reset) = lf_sawpos_phase_reset(freq,phase,reset);
+lf_sawpos_phase_reset(freq,phase,reset) = lf_sawpos_reset(freq,reset) + phase : ma.frac;
+lf_sawpos_reset(freq,reset) = ma.frac * (reset == 0) ~ +(freq/ma.SR);
+
+oscChooser(type) =
+  select3(type
+         , (PAF(center,index*1000,1))
+         , (FMformant(index*40,formantFreq)*0.0625)
+         , (octavedFOF(octavation)));
+
+// TODO: make work with negative frequency
 fund2freq(fund) = delta*ma.SR
 with {
   absDelta = abs(fund-fund');
   delta = select2(absDelta>0.5,absDelta,1-absDelta);
 };
-// phase = hslider("phase", 0, 0, 1, 0.001):si.smoo;
-//-----------------------------------------------
-// PAF oscilator
-//-----------------------------------------------
+
+///////////////////////////////////////////////////////////////////////////////
+//                               PAF oscilator                               //
+///////////////////////////////////////////////////////////////////////////////
+
 // http://msp.ucsd.edu/techniques/v0.11/book-html/node96.html
 //
 center = formantFreq / abs(freq);
-pafIndex = hslider("[0]PAF index[tooltip: PAF index]",	100, 0.001, 1000, 0.001):si.smoo;
 // deglitch adapted from Chris Chafe:
 // http://chrischafe.net/glitch-free-fm-vocal-synthesis/
 // center, fund, index, volume
@@ -61,8 +80,8 @@ with {
   // belltablesize 	= 200;
   // curve 	= ba.time:(((_-100)/25)<:exp((_*_)*-1));
   // curve 	= ba.time:(((x-100)/25)<:exp((w*w)*-1));
-  // volumeCompensate = 0.666+(i/300);
-  volumeCompensate = 1;
+  volumeCompensate = 0.666+(i/300)*0.75:min(1)*0.25;
+  // volumeCompensate = 1;
   wrap            = _<:(_>0,(_,1:fmod)+1,(_,1:fmod)):select2;
   centerWrap(c,f) = c:sampleAndHold(f)<:wrap;
   centerMin(c,f)  = c:sampleAndHold(f)-centerWrap(c,f);
@@ -72,9 +91,10 @@ with {
   // bell(f,i)       = (((f*0.5)-0.25:(_*4*ma.PI:cos))*i)+100:bellcurve;
   bell(f,i)       = ((((f*0.5)-0.25)*2*ma.PI:cos)*i)+100:bellcurve;
 };
-//-----------------------------------------------
-// FM formant oscilator
-//-----------------------------------------------
+
+///////////////////////////////////////////////////////////////////////////////
+//                           FM formant oscilator                            //
+///////////////////////////////////////////////////////////////////////////////
 
 // declare name 		"FMVox";
 // declare version		"1.0";
@@ -104,10 +124,6 @@ with {
   s2 = rdtable(ts1,t,i+1);
 };
 
-///////////////////////////////////////////////////////////////////////////////
-//      formant generator using uniform (phase-synchronous) oscillators      //
-///////////////////////////////////////////////////////////////////////////////
-
 // synced to an external phaser "fund"
 // the parameter eo sets the proportion of even and odd harmonics.
 FMformant(b,c,fund) = even+odd	// outputs the sum of bracketing harmonics
@@ -129,61 +145,43 @@ with {					// from f0, amp, bandwidth, center freq
 };
 
 ///////////////////////////////////////////////////////////////////////////////
-//                                    fof                                    //
+//                                   FOF                                     //
 ///////////////////////////////////////////////////////////////////////////////
 
 // declare author "Bart Brouns";
 // declare license "GPLv3";
 // declare name "fof";
 
-// import("CZ.lib");
-reset = button("reset");
-phase = hslider("phase", 0, -1, 1, 0.001):si.smoo;
-freq = hslider("freq", 440, 27.5, 3520, 0.1):si.smoo;
-fund(freq,phase,reset) = lf_sawpos_phase_reset(freq,phase,reset);
-lf_sawpos_phase_reset(freq,phase,reset) = lf_sawpos_reset(freq,reset) + phase : ma.frac;
-lf_sawpos_reset(freq,reset) = ma.frac * (reset == 0) ~ +(freq/ma.SR);
-
-
-
 // adapted from:
 // https://ccrma.stanford.edu/~mjolsen/pdfs/smc2016_MOlsenFOF.pdf
 
-///////////////////////////////////////////////////////////////////////////////
-//                            FOF Generation System                          //
-///////////////////////////////////////////////////////////////////////////////
-
-// function to generate a single Formant-Wave-Function
-///////////////////////////////////////////////////////////////////////////////
-   //                        Cyclic Impulse Train Streams                       //
-   ///////////////////////////////////////////////////////////////////////////////
-
-   // impulse train at frequency of fund
-   // clk(fund) = (1-1')+(fund<:-(mem)<0)';
-   clk(fund) = (1-1') +(
-                 abs(fund-fund')>0.5
-               )';
-   // impulse train at frequency f0 split into n cycles
-   clkCycle(n,fund) = clk(fund) <: par(i,n,resetCtr(n,(i+1)));
-   // function that lets through the mth impulse out of
-   // each consecutive group of n impulses
-   resetCtr(n,m) = _ <: (_,ctr(n)) : (_,(_==m)) : *;
-                                                  // function to count nonzero inputs and reset after
-                                                  // receiving x of them
-                                                  ctr(x) = (+(_)~(negSub(x)));
-   // function that subtracts value x from
-   // input stream value if input stream value >= x
-   negSub(x)= _<: (_>=x,_,_):((-1*_),_,_):((_*_),_):(_+_);
+//                        Cyclic Impulse Train Streams                       //
+// impulse train at frequency of fund
+// clk(fund) = (1-1')+(fund<:-(mem)<0)';
+clk(fund) = (1-1') +(
+              abs(fund-fund')>0.5
+            )';
+// impulse train at frequency f0 split into n cycles
+clkCycle(n,fund) = clk(fund) <: par(i,n,resetCtr(n,(i+1)));
+// function that lets through the mth impulse out of
+// each consecutive group of n impulses
+resetCtr(n,m) = _ <: (_,ctr(n)) : (_,(_==m)) : *;
+                                               // function to count nonzero inputs and reset after
+                                               // receiving x of them
+                                               ctr(x) = (+(_)~(negSub(x)));
+// function that subtracts value x from
+// input stream value if input stream value >= x
+negSub(x)= _<: (_>=x,_,_):((-1*_),_,_):((_*_),_):(_+_);
 
 
-   // main process
-   FOFosc(octavation,fund) =
-     (
-       clkCycle(multi,fund)
-       : par(i,multi,myFOF(fund)*OctMuliply(i))
-         :> _
-            // * (octavation:max(1)/maxOctavation)
-     )
+// main process
+octavedFOF(octavation,fund) =
+  (
+    clkCycle(multi,fund)
+    : par(i,multi,myFOF(fund)*OctMuliply(i))
+      :> _
+         * (octavation:max(1)/maxOctavation)
+  )
 ;
 
 
@@ -191,12 +189,7 @@ myFOF(fund,fofTrig) =
   fofEnv(fund,fofTrig)*fofSlaveOsc(fofTrig);
 
 fofEnv(fund,fofTrig) =
-  // ade(attack,decay,fofTrig);
   curved_ar(fund,attack,release,fofTrig) ;
-// attack = hslider("attack", 0, 0, 1, 0.001):pow(2);
-// decay = hslider("decay", 0, 0, 1, 0.001):pow(2);
-attack= hslider("attack", 2, 0.001, multi, 0.001):si.smoo;
-release= hslider("release", 2, 0.001, multi, 0.001):si.smoo;
 
 fofSlaveOsc(fofTrig) =
   // fund(formantFreq,0,fofTrig)
@@ -223,7 +216,6 @@ with {
   attSamples   = int( att * ma.SR / fund2freq(fund) );
   att = (a/scale);
   scale = ((a+r)/multi):max(1);
-  // TODO: make work with neg freq
   envelope = it.interpolate_linear(theRamp:SINshaper,from,to(state));
   theRamp = ramp(samples,trig);
   SINshaper(x) = sin(ma.PI*(x-0.5))*0.5+0.5;
@@ -256,4 +248,4 @@ OctMuliplyPart(i,oct) =
 
 multi = 2:pow(maxOctavation);
 maxOctavation = 4;
-octavation = hslider("octavation",0,0,maxOctavation,0.001):si.smoo;
+
